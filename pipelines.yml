@@ -1,0 +1,8 @@
+- pipeline.id: channels
+  path.config: "pipelines/channels/logstash.conf"
+- pipeline.id: failures
+  path.config: "pipelines/failures/logstash.conf"
+- pipeline.id: forwardings
+  path.config: "pipelines/forwardings/logstash.conf"
+- pipeline.id: payments
+  path.config: "pipelines/payments/logstash.conf"

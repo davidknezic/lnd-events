@@ -1,0 +1,103 @@
+#!/usr/bin/env node
+
+const https = require('https');
+const fs = require('fs');
+const EventEmitter = require('events');
+
+const cacheDir = `${process.env.HOME}/.lnpipe`;
+const chansFile = `${cacheDir}/chan-cache.json`;
+const nodesFile = `${cacheDir}/node-cache.json`;
+
+if (!fs.existsSync(cacheDir)){
+    fs.mkdirSync(cacheDir);
+    fs.writeFileSync(chansFile);
+    fs.writeFileSync(nodesFile);
+}
+
+const chans = require(chansFile);
+const nodes = require(nodesFile);
+
+// const chans = {}
+const me = '033d485a2aa57e0b868da2e5c32471c3256f9114734b78abfa6ae55cbdacbd5c3d'
+
+const stdin = stdinLineByLine();
+stdin.on('line', async (line) => {
+    if (!chans[line.chan_id_in]) {
+        chans[line.chan_id_in] = await request(`https://1ml.com/channel/${line.chan_id_in}/json`)
+        fs.writeFileSync('./chan-cache.json', JSON.stringify(chans));
+    }
+    const pubkey_in = chans[line.chan_id_in].node1_pub !== me ? chans[line.chan_id_in].node1_pub : chans[line.chan_id_in].node2_pub
+
+    if (!nodes[pubkey_in]) {
+        nodes[pubkey_in] = await request(`https://1ml.com/node/${pubkey_in}/json`)
+        fs.writeFileSync('./node-cache.json', JSON.stringify(nodes));
+    }
+    const noderank_in = nodes[pubkey_in].noderank || {}
+
+    if (!chans[line.chan_id_out]) {
+        chans[line.chan_id_out] = await request(`https://1ml.com/channel/${line.chan_id_out}/json`)
+        fs.writeFileSync('./chan-cache.json', JSON.stringify(chans));
+    }
+    const pubkey_out = chans[line.chan_id_out].node1_pub !== me ? chans[line.chan_id_out].node1_pub : chans[line.chan_id_out].node2_pub
+
+    if (!nodes[pubkey_out]) {
+        nodes[pubkey_out] = await request(`https://1ml.com/node/${pubkey_out}/json`)
+        fs.writeFileSync('./node-cache.json', JSON.stringify(nodes));
+    }
+    const noderank_out = nodes[pubkey_out].noderank || {}
+
+    console.log(JSON.stringify({
+        timestamp: line.timestamp,
+        chan_id_in: line.chan_id_in,
+        pubkey_in: pubkey_in,
+        alias_in: nodes[pubkey_in].alias,
+        color_in: nodes[pubkey_in].color,
+        capacity_in: noderank_in.capacity,
+        channelcount_in: noderank_in.channelcount,
+        age_in: noderank_in.age,
+        growth_in: noderank_in.growth,
+        availability_in: noderank_in.availability,
+        chan_id_out: line.chan_id_out,
+        pubkey_out: pubkey_out,
+        alias_out: nodes[pubkey_out].alias,
+        color_out: nodes[pubkey_out].color,
+        capacity_out: noderank_out.capacity,
+        channelcount_out: noderank_out.channelcount,
+        age_out: noderank_out.age,
+        growth_out: noderank_out.growth,
+        availability_out: noderank_out.availability,
+        amt_in: parseInt(line.amt_in),
+        amt_out: parseInt(line.amt_out),
+        fee: parseInt(line.fee),
+        message: `Forwarded event at ${line.timestamp}, ${line.amt_in} from ${line.chan_id_in}, ${line.amt_out} to ${line.chan_id_out}`,
+    }))
+});
+
+function request(url) {
+    return new Promise((resolve, reject) => {
+        https.get(url, (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk });
+            res.on('end', () => { resolve(JSON.parse(data)) });
+            res.on("error", (err) => { reject(err) });
+        })
+    })
+}
+
+function stdinLineByLine() {
+  const stdin = new EventEmitter();
+  let buff = "";
+
+  process.stdin
+    .on('data', data => {
+      buff += data;
+      lines = buff.split(/[\r\n|\n]/);
+      buff = lines.pop();
+      lines.forEach(line => stdin.emit('line', JSON.parse(line)));
+    })
+    .on('end', () => {
+      if (buff.length > 0) stdin.emit('line', JSON.parse(buff));
+    });
+
+  return stdin;
+}

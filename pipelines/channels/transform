@@ -1,0 +1,133 @@
+#!/usr/bin/env node
+
+const https = require('https');
+const fs = require('fs');
+const EventEmitter = require('events');
+
+const cacheDir = `${process.env.HOME}/.lnpipe`;
+const blocksFile = `${cacheDir}/block-cache.json`;
+const txnsFile = `${cacheDir}/tx-cache.json`;
+const nodesFile = `${cacheDir}/node-cache.json`;
+
+if (!fs.existsSync(cacheDir)){
+    fs.mkdirSync(cacheDir);
+    fs.writeFileSync(blocksFile);
+    fs.writeFileSync(txnsFile);
+    fs.writeFileSync(nodesFile);
+}
+
+const blocks = require(blocksFile);
+const txns = require(txnsFile);
+const nodes = require(nodesFile);
+
+const me = '033d485a2aa57e0b868da2e5c32471c3256f9114734b78abfa6ae55cbdacbd5c3d'
+
+const stdin = stdinLineByLine();
+stdin.on('line', async (line) => {
+    if (['FUNDING_CANCELED'].indexOf(line.close_type) >= 0) {
+        return
+    }
+
+    const [openingTx, outIndex] = line.channel_point.split(':')
+
+    if (!txns[openingTx]) {
+        txns[openingTx] = await request(`https://blockstream.info/api/tx/${openingTx}/status`)
+        fs.writeFileSync('./tx-cache.json', JSON.stringify(txns));
+    }
+
+    const tx = txns[openingTx]
+
+    if (!blocks[tx.block_hash]) {
+        blocks[tx.block_hash] = await request(`https://blockstream.info/api/block/${tx.block_hash}`)
+        fs.writeFileSync('./block-cache.json', JSON.stringify(blocks));
+    }
+
+    const block = blocks[tx.block_hash]
+
+    if (!nodes[line.remote_pubkey]) {
+        nodes[line.remote_pubkey] = await request(`https://1ml.com/node/${line.remote_pubkey}/json`)
+        fs.writeFileSync('./node-cache.json', JSON.stringify(nodes));
+    }
+
+    const noderank = nodes[line.remote_pubkey].noderank || {}
+
+    console.log(JSON.stringify({
+        type: "channel_open",
+        remote_pubkey: line.remote_pubkey,
+        remote_alias: nodes[line.remote_pubkey].alias,
+        remote_color: nodes[line.remote_pubkey].color,
+        remote_capacity: noderank.capacity,
+        remote_channelcount: noderank.channelcount,
+        remote_age: noderank.age,
+        remote_growth: noderank.growth,
+        remote_availability: noderank.availability,
+        capacity: parseInt(line.capacity),
+        chan_id: line.chan_id,
+        timestamp: block.timestamp,
+        message: `Opened channel ${line.chan_id} with peer ${line.remote_pubkey} and capacity ${line.capacity} on ${block.timestamp}`,
+    }))
+
+    // Also write the closing event
+    if (line.closing_tx_hash) {
+        if (!txns[line.closing_tx_hash]) {
+            txns[line.closing_tx_hash] = await request(`https://blockstream.info/api/tx/${line.closing_tx_hash}/status`)
+            fs.writeFileSync('./tx-cache.json', JSON.stringify(txns));
+        }
+
+        const tx = txns[line.closing_tx_hash]
+
+        if (!blocks[tx.block_hash]) {
+            blocks[tx.block_hash] = await request(`https://blockstream.info/api/block/${tx.block_hash}`)
+            fs.writeFileSync('./block-cache.json', JSON.stringify(blocks));
+        }
+
+        const block = blocks[tx.block_hash]
+        const noderank = nodes[line.remote_pubkey].noderank || {}
+
+        console.log(JSON.stringify({
+            type: "channel_close",
+            remote_pubkey: line.remote_pubkey,
+            remote_alias: nodes[line.remote_pubkey].alias,
+            remote_color: nodes[line.remote_pubkey].color,
+            remote_capacity: noderank.capacity,
+            remote_channelcount: noderank.channelcount,
+            remote_age: noderank.age,
+            remote_growth: noderank.growth,
+            remote_availability: noderank.availability,
+            capacity: parseInt(line.capacity),
+            chan_id: line.chan_id,
+            timestamp: block.timestamp,
+            settled_balance: parseInt(line.settled_balance),
+            message: `Closed channel ${line.chan_id} to peer ${line.remote_pubkey} with balance ${line.settled_balance} on ${block.timestamp}`,
+        }))
+    }
+});
+
+function request(url) {
+    return new Promise((resolve, reject) => {
+        https.get(url, (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk });
+            res.on('end', () => { resolve(JSON.parse(data)) });
+            res.on("error", (err) => { reject(err) });
+        })
+    })
+}
+
+function stdinLineByLine() {
+  const stdin = new EventEmitter();
+  let buff = "";
+
+  process.stdin
+    .on('data', data => {
+      buff += data;
+      lines = buff.split(/[\r\n|\n]/);
+      buff = lines.pop();
+      lines.forEach(line => stdin.emit('line', JSON.parse(line)));
+    })
+    .on('end', () => {
+      if (buff.length > 0) stdin.emit('line', JSON.parse(buff));
+    });
+
+  return stdin;
+}

@@ -1,0 +1,82 @@
+#!/usr/bin/env node
+
+const https = require('https');
+const fs = require('fs');
+const EventEmitter = require('events');
+
+const cacheDir = `${process.env.HOME}/.lnpipe`;
+const nodesFile = `${cacheDir}/node-cache.json`;
+
+if (!fs.existsSync(cacheDir)){
+    fs.mkdirSync(cacheDir);
+    fs.writeFileSync(nodesFile);
+}
+
+const nodes = require(nodesFile);
+
+const me = '033d485a2aa57e0b868da2e5c32471c3256f9114734b78abfa6ae55cbdacbd5c3d'
+
+const stdin = stdinLineByLine();
+stdin.on('line', async (line) => {
+    const last = line.path[line.path.length - 1]
+
+    if (last !== me) {
+        // Only pass on balancing payments
+        return
+    }
+
+    const pubkey_in = line.path[0]
+    const pubkey_out = line.path[line.path.length - 2]
+
+    if (!nodes[pubkey_in]) {
+        nodes[pubkey_in] = await request(`https://1ml.com/node/${pubkey_in}/json`)
+        fs.writeFileSync('./node-cache.json', JSON.stringify(nodes));
+    }
+
+    if (!nodes[pubkey_out]) {
+        nodes[pubkey_out] = await request(`https://1ml.com/node/${pubkey_out}/json`)
+        fs.writeFileSync('./node-cache.json', JSON.stringify(nodes));
+    }
+
+    console.log(JSON.stringify({
+        timestamp: line.creation_date,
+        pubkey_in: pubkey_in,
+        alias_in: nodes[pubkey_in].alias,
+        color_in: nodes[pubkey_in].color,
+        pubkey_out: pubkey_out,
+        alias_out: nodes[pubkey_out].alias,
+        color_out: nodes[pubkey_out].color,
+        amt: parseInt(line.value_sat),
+        fee: parseInt(line.fee),
+        message: `Balanced at ${line.creation_date}, ${line.value_sat} from ${pubkey_in} to ${pubkey_out} with fee ${line.fee}`,
+    }))
+});
+
+function request(url) {
+    return new Promise((resolve, reject) => {
+        https.get(url, (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk });
+            res.on('end', () => { resolve(JSON.parse(data)) });
+            res.on("error", (err) => { reject(err) });
+        })
+    })
+}
+
+function stdinLineByLine() {
+  const stdin = new EventEmitter();
+  let buff = "";
+
+  process.stdin
+    .on('data', data => {
+      buff += data;
+      lines = buff.split(/[\r\n|\n]/);
+      buff = lines.pop();
+      lines.forEach(line => stdin.emit('line', JSON.parse(line)));
+    })
+    .on('end', () => {
+      if (buff.length > 0) stdin.emit('line', JSON.parse(buff));
+    });
+
+  return stdin;
+}
